@@ -1,0 +1,92 @@
+name: Dummy E2E tests for epic adapter
+
+permissions:
+  contents: read
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+env:
+  API_KEY: ${{ secrets.E2E_API_KEY }}
+  DTO_MAPPER_URI: http://localhost:8010
+  DTO_MAPPER_API_KEY: ${{ secrets.E2E_API_KEY }}
+  DTO_MAPPER_JWT_SECRET: ${{ secrets.E2E_DTO_MAPPER_JWT_SECRET }}
+  DTO_MAPPER_ISSUERS: https://vendorservices.epic.com/interconnect-amcurprd-oauth/oauth2
+  SULLY_URL: https://ehr-proxy-dev.sully.ai
+  SULLY_API_KEY: ${{ secrets.E2E_SULLY_API_KEY }}
+  X_API_KEY: ${{ secrets.E2E_API_KEY }}
+  X_SULLY_TRANSACTION_ID: ${{ vars.E2E_SULLY_TRANSACTION_ID }}
+  X_SULLY_ORGANIZATION_ID: ${{ vars.E2E_SULLY_ORGANIZATION_ID }}
+  URLBASE: ${{ vars.E2E_URLBASE }}
+  PATIENT_DOB: ${{ vars.E2E_PATIENT_DOB }}
+  PATIENT_FIRST_NAME: ${{ vars.E2E_PATIENT_FIRST_NAME }}
+  PATIENT_LAST_NAME: ${{ vars.E2E_PATIENT_LAST_NAME }}
+  ENCOUNTER_ID: ${{ vars.E2E_ENCOUNTER_ID }}
+  SLACK_BOT_TOKEN: ${{ secrets.E2E_SLACK_BOT_TOKEN }}
+  SLACK_CHANNEL_ID: ${{ vars.E2E_SLACK_CHANNEL_ID }}
+  GITHUB_ACTION_URL: "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+jobs:
+  e2e-test:
+    if: github.ref == 'refs/heads/dev'
+    name: 🧪 Run e2e tests for epic adapter
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: ⬇️ Checkout Code
+        uses: actions/checkout@v4
+
+      - name: ⎔ Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: ⎔ Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: 📥 Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: 🏗️ Build backend service
+        run: |
+          cd apps/ehr-epic-backend-service
+          if [ -f "package.json" ] && grep -q '"build"' package.json; then
+            echo "Building ehr-epic-backend-service"
+            pnpm run build
+          else
+            echo "No build script found for ehr-epic-backend-service, skipping..."
+          fi
+
+      - name: Run backend service
+        run: |
+          cd apps/ehr-epic-backend-service
+          pnpm start &
+
+      - name: ⬇️ Checkout sullyai-copilot repository
+        uses: actions/checkout@v4
+        with:
+          repository: Odiggo/sullyai-copilot
+          token: ${{ secrets.EHR_PAT_AUTOMATED_TESTS }}
+          path: sullyai-copilot
+
+      - name: 📥 Install dependencies for tests
+        run: |
+          cd sullyai-copilot/apps/ehr-proxy/test/integrations
+          pnpm install --frozen-lockfile
+
+      - name: 🏗️ Build for sullyai-ehr-integration-tests
+        run: |
+          cd sullyai-copilot/apps/ehr-proxy/test/integrations
+          echo '{ "compilerOptions": { "outDir": "./dist" }, "include": ["__tests__/github-test-reporter.ts"], "exclude": ["node_modules", "dist"] }' > tmp-tsconfig.json
+          pnpm run tsc --project tmp-tsconfig.json
+
+      - name: 🧪 Run tests
+        if: success() || failure()
+        run: |
+          cd sullyai-copilot/apps/ehr-proxy/test/integrations
+          pnpm run test --reporters="./dist/github-test-reporter.js"
